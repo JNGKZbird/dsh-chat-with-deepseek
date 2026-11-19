@@ -19,3 +19,16 @@ minified files retain their upstream headers where applicable.
 DeepSeek and the DeepSeek whale mark are trademarks of their respective owner.
 This project is an unofficial community plugin and is not affiliated with,
 endorsed by, or sponsored by DeepSeek.
+
+## DSH brand and icon assets
+
+The DeepSeek whale/logo assets under `app/assets/`, and the plugin icon
+`icon.svg`, are derived from the DeepSeek Harness (DSH) open-source project:
+
+- Project: https://github.com/deepseek-ai/deepseek-harness
+- License: MIT
+- Attribution: DeepSeek Harness (DSH), Copyright DeepSeek
+
+They are included with attribution for use by individual developers. DeepSeek
+names and marks remain trademarks of DeepSeek; this project is not an official
+DeepSeek product.

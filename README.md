@@ -287,6 +287,6 @@ ASR 是 host 0.6.0+ 的路由，必须重启 DSH，只刷新窗口不够；同�
 
 - 这些测试会启动 mock host + 独立 `user-data-dir` 的 headless Edge，使用 fake/mock 网络，不代表真实 API 效果。`probe_real_import.py` 会读取真实导出 ZIP，只有用户明确同意时才跑。
 - 真实 1488 会话 ZIP 在隔离环境导入（2026-11-19 开发记录）：预览 2.35s、UI 出现 1488 会话 0.37s、堆 323→345MB，首会话与导航轨正常。
-- **许可**：原创代码采用 MIT 许可证（见 `LICENSE`）。第三方：markdown-it 14.1.0、KaTeX 0.16.11、JSZip 3.10.1、pdf.js 3.11、highlight.js 11.11、Inter 字体，各自许可证见 `THIRD_PARTY_NOTICES.md`。DeepSeek 名称与鲸鱼标识归 DeepSeek；图标与品牌素材取自 DSH 的 MIT 开源资源，DeepSeek 允许开发者这样使用；本项目是非官方社区插件，与 DeepSeek 无合作或背书。
+- **许可**：原创代码采用 MIT 许可证（见 `LICENSE`）。第三方：markdown-it 14.1.0、KaTeX 0.16.11、JSZip 3.10.1、pdf.js 3.11、highlight.js 11.11、Inter 字体，各自许可证见 `THIRD_PARTY_NOTICES.md`。DeepSeek 名称与鲸鱼标识归 DeepSeek；图标与品牌素材取自 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（MIT）的公开资源，按 MIT 要求保留出处与许可声明；DeepSeek 允许个人开发者这样使用；本项目是非官方社区插件，与 DeepSeek 无合作或背书。
 - **兼容性**：开发与验收在 Windows 11 + DSH 0.2.x；其他 DSH 支持的桌面平台未逐一验收。
 - **致谢**：DeepSeek Harness 提供模型目录与凭据；v3 导出格式与 DeepSeek 官方 chat-demo 兼容；第三方库作者。
