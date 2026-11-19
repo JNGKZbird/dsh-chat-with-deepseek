@@ -3,7 +3,7 @@
   "version": "0.6.1",
   "private": true,
   "type": "module",
-  "description": "DeepSeek 网页端风格的纯聊天面板：API 直连，只保留联网搜索。",
+  "description": "DSH Chat with DeepSeek：DeepSeek 网页聊天复刻插件，只保留联网搜索。",
   "license": "MIT",
   "author": "JNGKZbird",
   "exports": {

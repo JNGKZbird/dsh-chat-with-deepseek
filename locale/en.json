@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "DeepSeek web chat",
-    "description": "Chat with the DeepSeek API in the official web layout. Web search only; no other tools."
+    "title": "DSH Chat with DeepSeek",
+    "description": "A DeepSeek web-chat recreation for DSH; web search only, no other tools."
   }
 }
