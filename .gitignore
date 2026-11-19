@@ -1,0 +1,15 @@
+# Local development profiles and backups (may contain user data)
+backups/
+.dsh-dev/
+*.log
+*.tmp
+
+# Python / Node debris
+__pycache__/
+*.pyc
+node_modules/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+desktop.ini

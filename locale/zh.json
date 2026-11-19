@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DeepSeek 网页聊天",
+    "description": "以 DeepSeek 网页端的外观直接使用 DeepSeek API；只保留联网搜索，不启用其他工具。"
+  }
+}
