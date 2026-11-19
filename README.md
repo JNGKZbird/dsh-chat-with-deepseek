@@ -150,6 +150,8 @@ DSH 默认是给开发者准备的 agent harness：每次对话会带工具、�
 
 前置：DeepSeek Harness `>=0.2.0-rc.1 <0.3.0-0`；当前版本未发布 npm/Release，从本地目录安装。
 
+> 从旧包名 `dsh-deepseek-pc-chat` 升级时，插件 ID 已改为 `dsh-chat-with-deepseek`。请先移除旧插件条目，再添加本目录，避免两个入口同时加载；会话文件与 `/dsh-deepseek-chat` 路由前缀保持不变。
+
 1. 在 DSH 插件管理里点「添加插件」，选择本仓库目录；或命令行：
 
    ```sh
