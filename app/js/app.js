@@ -16,6 +16,140 @@
   // may be a host-relative path, so resolve it against the document first.
   const API_BASE = new URL('../api/', new URL(APP_BASE, location.href)).href;
 
+  // ---- Offline Shiki highlighter -------------------------------------
+  // DSH's own chat renders fenced code with Shiki's `css-variables` theme:
+  // every token references the host's --shiki-token-* palette, so light and
+  // dark follow the surrounding theme without re-highlighting. The runtime is
+  // a locally vendored ESM bundle (app/vendor/shiki/) built from the same
+  // Shiki major, theme and JavaScript regex engine as DSH; grammars load on
+  // demand and fences upgrade in place once their grammar arrives.
+  const SHIKI_VERSION = '1';
+  // While a reply streams, the code fence still growing is re-rendered every
+  // frame. Re-running Shiki on a large block costs ~100ms per pass, so a
+  // growing fence above this size stays plain until the reply settles.
+  const SHIKI_STREAM_LIMIT = 2000;
+  const CODE_CACHE_LIMIT = 300;
+  const CODE_CACHE_CHARS = 4 * 1024 * 1024;
+  let shikiRuntime = null;
+  let shikiState = 'idle'; // idle | loading | ready | failed
+  const codeHtmlCache = new Map();
+  let codeCacheChars = 0;
+  let codeUpgradeTimer = null;
+
+  function bootShiki() {
+    if (shikiState !== 'idle') return;
+    shikiState = 'loading';
+    try {
+      const url = new URL(
+        `vendor/shiki/shiki.js?v=${SHIKI_VERSION}`,
+        new URL(APP_BASE, location.href),
+      ).href;
+      import(url)
+        .then((mod) => mod.createRuntime())
+        .then((runtime) => {
+          shikiRuntime = runtime;
+          shikiState = 'ready';
+          scheduleCodeUpgrade();
+        })
+        .catch(() => {
+          shikiState = 'failed';
+        });
+    } catch {
+      // A broken highlighter must never take the chat surface down with it.
+      shikiState = 'failed';
+    }
+  }
+
+  function codeCacheStore(key, html) {
+    codeHtmlCache.set(key, html);
+    codeCacheChars += key.length + html.length;
+    while (codeHtmlCache.size > CODE_CACHE_LIMIT || codeCacheChars > CODE_CACHE_CHARS) {
+      const oldest = codeHtmlCache.keys().next();
+      if (oldest.done) break;
+      const oldHtml = codeHtmlCache.get(oldest.value);
+      codeHtmlCache.delete(oldest.value);
+      codeCacheChars -= oldest.value.length + (oldHtml ? oldHtml.length : 0);
+    }
+  }
+
+  // Shiki emits bare `var(--shiki-*)` references. Inside DSH the host owns
+  // that palette; the second argument keeps the plugin coloured on hosts (or
+  // previews) that never publish it, with the same palette per theme.
+  function withTokenFallbacks(html) {
+    return html.replace(/var\(--shiki-([a-z-]+)\)/g, 'var(--shiki-$1, var(--dsc-shiki-$1))');
+  }
+
+  // Synchronous when possible. Returns null while the grammar is still
+  // loading, which the caller renders as plain text.
+  function highlightCode(code, lang) {
+    if (!shikiRuntime || !lang) return null;
+    const key = `${lang}\u0000${code}`;
+    const cached = codeHtmlCache.get(key);
+    if (cached !== undefined) return cached;
+    const raw = shikiRuntime.highlight(code, lang);
+    if (!raw) return null;
+    const html = withTokenFallbacks(raw);
+    codeCacheStore(key, html);
+    return html;
+  }
+
+  function scheduleCodeUpgrade() {
+    if (codeUpgradeTimer !== null) return;
+    codeUpgradeTimer = setTimeout(() => {
+      codeUpgradeTimer = null;
+      upgradeCodeBlocks();
+    }, 0);
+  }
+
+  // Replace plain <pre> bodies with Shiki output once their grammar is in.
+  // Patching the pre in place keeps scroll position, hover state and any
+  // running stream untouched, unlike a full message re-render.
+  function upgradeCodeBlocks() {
+    if (!shikiRuntime) return;
+    for (const block of document.querySelectorAll('.dsc-code-block[data-dsc-hl="pending"]')) {
+      if (block.dataset.dscStream === '1') continue;
+      const lang = block.dataset.lang || '';
+      if (shikiRuntime.status(lang) !== 'ready') continue;
+      const codeEl = block.querySelector('code');
+      const pre = block.querySelector('pre');
+      if (!codeEl || !pre) continue;
+      const html = highlightCode(codeEl.textContent, lang);
+      if (!html) continue;
+      pre.outerHTML = html;
+      block.dataset.dscHl = 'ready';
+    }
+  }
+
+  function codeBlockHTML(code, lang, env, tokens, idx) {
+    const streaming = !!(env && env.streaming);
+    const lastFence = (() => {
+      for (let i = idx + 1; i < tokens.length; i += 1) {
+        if (tokens[i].type === 'fence' || tokens[i].type === 'code_block') return false;
+      }
+      return true;
+    })();
+    const growing = streaming && lastFence;
+    const deferred = growing && code.length > SHIKI_STREAM_LIMIT;
+    let pre = null;
+    let status = deferred ? 'pending' : 'plain';
+    if (!deferred) {
+      pre = highlightCode(code, lang);
+      if (pre) status = 'ready';
+      else if (lang && shikiRuntime && shikiRuntime.status(lang) === 'loading') {
+        status = 'pending';
+        void shikiRuntime.load(lang).then(scheduleCodeUpgrade);
+      } else if (lang && shikiState === 'loading') {
+        status = 'pending';
+      }
+    }
+    if (pre === null) pre = `<pre class="dsc-code-pre"><code>${escapeHtml(code)}</code></pre>`;
+    const streamAttr = growing ? ' data-dsc-stream="1"' : '';
+    return `<div class="dsc-code-block" data-lang="${escapeHtml(lang)}" data-dsc-hl="${status}"${streamAttr}>`
+      + `<div class="dsc-code-head"><span class="dsc-code-lang">${escapeHtml(lang)}</span>`
+      + '<button class="dsc-code-copy" type="button" data-act="copy-code" aria-label="复制代码">复制</button></div>'
+      + `${pre}</div>`;
+  }
+
   let markdown = null;
   function markdownRenderer() {
     if (markdown !== null) return markdown;
@@ -36,25 +170,44 @@
       tokens[idx].attrSet('rel', 'noreferrer noopener');
       return linkOpen(tokens, idx, options, env, self);
     };
-    // Code blocks: DSH-style banner (language + copy) over a highlighted body.
-    // Unknown languages stay plain rather than paying highlightAuto per frame.
-    markdown.renderer.rules.fence = (tokens, idx) => {
+    // Fences carry the DSH chrome: a language banner (with the copy label)
+    // over the highlighted body. Indented code blocks get the same card
+    // without a language.
+    markdown.renderer.rules.fence = (tokens, idx, options, env) => {
       const token = tokens[idx];
-      const info = String(token.info || '').trim().split(/\s+/)[0].toLowerCase();
-      let body;
-      if (window.hljs && info && window.hljs.getLanguage(info)) {
-        try {
-          body = window.hljs.highlight(token.content, { language: info }).value;
-        } catch {
-          body = escapeHtml(token.content);
-        }
-      } else {
-        body = escapeHtml(token.content);
+      // DSH keeps only the leading word of the info string (the language).
+      const lang = (/^[\w-]+/.exec(String(token.info || '').trim()) || [''])[0].toLowerCase();
+      const code = token.content.endsWith('\n') ? token.content.slice(0, -1) : token.content;
+      // DSH renders a ```math fence as a display formula unless it is still
+      // streaming (mid-fence content is not valid math yet).
+      if (lang === 'math' && !(env && env.streaming)) {
+        return `<p class="dsc-math-block">${renderMathHTML(code, true)}</p>\n`;
       }
-      return `<div class="dsc-code-block"><div class="dsc-code-head"><span class="dsc-code-lang">${escapeHtml(info || 'text')}</span><button class="dsc-code-copy" type="button" data-act="copy-code" aria-label="复制代码">${icon('copy', 14)}<span>复制</span></button></div><pre><code class="hljs${info ? ` language-${escapeHtml(info)}` : ''}">${body}</code></pre></div>`;
+      // An empty fence stays a bare block, exactly like DSH.
+      if (code === '') return `<pre><code class="language-${escapeHtml(lang)}"></code></pre>\n`;
+      return codeBlockHTML(code, lang, env, tokens, idx);
     };
+    markdown.renderer.rules.code_block = (tokens, idx, options, env) => {
+      const code = tokens[idx].content.endsWith('\n')
+        ? tokens[idx].content.slice(0, -1)
+        : tokens[idx].content;
+      return codeBlockHTML(code, '', env, tokens, idx);
+    };
+    // DSH scrolls wide tables inside their own wrapper.
+    markdown.renderer.rules.table_open = () => '<div class="dsc-table-scroll"><table>\n';
+    markdown.renderer.rules.table_close = () => '</table></div>\n';
     registerMath(markdown);
     return markdown;
+  }
+
+  function renderMathHTML(content, displayMode) {
+    const katex = window.katex;
+    if (!katex) return escapeHtml(content);
+    try {
+      return katex.renderToString(content, { displayMode, throwOnError: false });
+    } catch {
+      return escapeHtml(content);
+    }
   }
 
   // Minimal KaTeX support: block `$$...$$`, inline `$...$`. Code spans/blocks
@@ -138,20 +291,13 @@
       return true;
     }, { alt: ['paragraph', 'reference', 'blockquote', 'list'] });
 
-    const render = (content, displayMode) => {
-      try {
-        return katex.renderToString(content, { displayMode, throwOnError: false });
-      } catch {
-        return escapeHtml(content);
-      }
-    };
-    md.renderer.rules.math_inline = (tokens, idx) => render(tokens[idx].content, false);
-    md.renderer.rules.math_block = (tokens, idx) => `<p class="dsc-math-block">${render(tokens[idx].content, true)}</p>\n`;
+    md.renderer.rules.math_inline = (tokens, idx) => renderMathHTML(tokens[idx].content, false);
+    md.renderer.rules.math_block = (tokens, idx) => `<p class="dsc-math-block">${renderMathHTML(tokens[idx].content, true)}</p>\n`;
   }
 
-  function renderMarkdown(text) {
+  function renderMarkdown(text, options) {
     const engine = markdownRenderer();
-    if (engine) return engine.render(text);
+    if (engine) return engine.render(text, options || {});
     return `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>`;
   }
 
@@ -1224,6 +1370,7 @@
     root.dataset.view = state.view;
     root.dataset.theme = state.theme;
     root.dataset.embedded = opts.surface === 'dsh' ? '1' : '0';
+    bootShiki();
     root.dataset.select = '0';
     root.dataset.sidebarPhase = 'idle';
     root.innerHTML = shellHTML();
@@ -5380,6 +5527,7 @@
           roundLocks.has(message.id),
         ))
         .join('');
+      scheduleCodeUpgrade();
       if (state.findOn) refreshFindMatches();
       updateFindAvailability();
       renderRail();
@@ -5433,6 +5581,7 @@
         if (md.dataset.streamHtml !== html) {
           md.innerHTML = html;
           md.dataset.streamHtml = html;
+          scheduleCodeUpgrade();
         }
       }
       updateSendState();
@@ -5961,7 +6110,7 @@ ${previous.text}`);
         stream.frame = requestAnimationFrame(() => {
           stream.frame = 0;
           refreshActivity(assistant);
-          if (assistant.text) assistant.html = renderMarkdown(assistant.text);
+          if (assistant.text) assistant.html = renderMarkdown(assistant.text, { streaming: true });
           if (state.activeId === sessionId) updateStreamingMessage(assistant);
         });
       };
@@ -6657,7 +6806,15 @@ ${summaryText}`);
         if (act === 'copy-code') {
           const code = actionEl.closest('.dsc-code-block')?.querySelector('code');
           const text = code ? code.textContent : '';
-          navigator.clipboard?.writeText?.(text).then(() => showToast('已复制代码')).catch(() => showToast('复制失败'));
+          navigator.clipboard?.writeText?.(text).then(() => {
+            // Inline confirmation like DSH: the label itself flips, no toast.
+            actionEl.textContent = '已复制';
+            if (actionEl.dscCopiedTimer) clearTimeout(actionEl.dscCopiedTimer);
+            actionEl.dscCopiedTimer = setTimeout(() => {
+              actionEl.textContent = '复制';
+              actionEl.dscCopiedTimer = null;
+            }, 1000);
+          }).catch(() => showToast('复制失败'));
           return;
         }
         if (act === 'regenerate') {
@@ -7119,5 +7276,5 @@ ${summaryText}`);
     };
   }
 
-  window.DSChat = { mount, version: '2.25.3' };
+  window.DSChat = { mount, version: '2.26.0' };
 })();

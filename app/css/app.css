@@ -138,8 +138,11 @@
   --dsc-composer-border: rgba(0, 0, 0, 0.08);
   --dsc-menu: #ffffff;
   --dsc-code: #f9fafb;
-  --dsc-code-banner: #f5f6f7;
-  --dsc-inline-code: #ebeef2;
+  --dsc-code-banner: #f9fafb;
+  --dsc-inline-code: #fafafa;
+  --dsc-md-code-block: #f9fafb;
+  --dsc-md-code-banner: #f9fafb;
+  --dsc-md-inline-code: #fafafa;
   --dsc-caption-bg: #f5f6f7;
   --dsc-shadow-1: 0 2px 4px rgba(0, 0, 0, 0.05);
   --dsc-shadow-2: 0 4px 12px rgba(0, 0, 0, 0.02), 0 2px 8px rgba(0, 0, 0, 0.04);
@@ -226,8 +229,11 @@
   --dsc-composer-border: rgba(255, 255, 255, 0.08);
   --dsc-menu: #232324;
   --dsc-code: #151517;
-  --dsc-code-banner: #232324;
-  --dsc-inline-code: #2c2c2e;
+  --dsc-code-banner: #2c2c2e;
+  --dsc-inline-code: #292929;
+  --dsc-md-code-block: #1b1b1c;
+  --dsc-md-code-banner: #2c2c2e;
+  --dsc-md-inline-code: #292929;
   --dsc-caption-bg: #232324;
   --dsc-shadow-1: 0 2px 4px rgba(0, 0, 0, 0.4);
   --dsc-shadow-2: 0 4px 12px rgba(0, 0, 0, 0.24), 0 2px 8px rgba(0, 0, 0, 0.28);
@@ -1926,39 +1932,27 @@
   align-items: stretch;
 }
 
+/* Markdown body: DSH chat tokens.
+   Inside DSH the host publishes --dsw-alias-* colours, the --dsw-font-markdown-*
+   ladder and the --shiki-* token palette; the --dsc-* fallbacks keep the
+   standalone preview on the DeepSeek web palette. Margins, list geometry and
+   table rules mirror DSH's chat markdown sheet. */
 .dsc-md {
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-family: var(--dsc-font);
   font-size: var(--dsw-font-markdown-base-font-size, var(--dsh-content-font-size, 16px));
   font-weight: 400;
   line-height: var(--dsw-font-markdown-base-line-height, calc(28px + var(--dsh-content-font-delta, 0px)));
-  color: var(--dsc-text);
-  overflow-wrap: anywhere;
+  color: var(--dsw-alias-label-primary, var(--dsc-text));
 }
 
-.dsc-md p {
-  margin: 12px 0;
-}
-
-.dsc-md .dsc-math-block {
-  margin: 14px 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-
-.dsc-md .katex {
-  font-size: 1.05em;
-}
-
-.dsc-md > :first-child {
-  margin-top: 0;
-}
-
-.dsc-md > :last-child {
-  margin-bottom: 0;
+.dsc-md strong {
+  font-weight: 600;
 }
 
 .dsc-md h1 {
-  margin: 28px 0 14px;
+  margin: 32px 0 16px;
   font-family: var(--dsc-font);
   font-size: var(--dsw-font-markdown-h1-font-size, calc(22px + var(--dsh-content-font-delta, 0px)));
   font-weight: 700;
@@ -1966,7 +1960,7 @@
 }
 
 .dsc-md h2 {
-  margin: 28px 0 14px;
+  margin: 32px 0 16px;
   font-family: var(--dsc-font);
   font-size: var(--dsw-font-markdown-h2-font-size, calc(20px + var(--dsh-content-font-delta, 0px)));
   font-weight: 700;
@@ -1974,7 +1968,7 @@
 }
 
 .dsc-md h3 {
-  margin: 24px 0 12px;
+  margin: 32px 0 16px;
   font-family: var(--dsc-font);
   font-size: var(--dsw-font-markdown-h3-font-size, calc(18px + var(--dsh-content-font-delta, 0px)));
   font-weight: 700;
@@ -1982,7 +1976,7 @@
 }
 
 .dsc-md h4 {
-  margin: 26px 0 12px;
+  margin: 16px 0;
   font-family: var(--dsc-font);
   font-size: var(--dsw-font-markdown-h4-font-size, calc(16px + var(--dsh-content-font-delta, 0px)));
   font-weight: 600;
@@ -1991,232 +1985,307 @@
 
 .dsc-md h5,
 .dsc-md h6 {
-  margin: 22px 0 10px;
+  margin: 16px 0;
   font-family: var(--dsc-font);
-  font-size: var(--dsw-font-markdown-h4-font-size, calc(16px + var(--dsh-content-font-delta, 0px)));
+  font-size: var(--dsw-font-markdown-base-font-size, var(--dsh-content-font-size, 16px));
   font-weight: 600;
-  line-height: var(--dsw-font-markdown-h4-line-height, calc(28px + var(--dsh-content-font-delta, 0px)));
+  line-height: var(--dsw-font-markdown-base-line-height, calc(28px + var(--dsh-content-font-delta, 0px)));
+}
+
+.dsc-md :where(h1, h2, h3, h4, h5, h6) strong {
+  font-weight: inherit;
+}
+
+.dsc-md p {
+  margin: 16px 0;
+}
+
+.dsc-md .dsc-math-block {
+  margin: 16px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.dsc-md .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.dsc-md > :first-child,
+.dsc-md p:first-child {
+  margin-top: 0 !important;
+}
+
+.dsc-md > :last-child,
+.dsc-md p:last-child {
+  margin-bottom: 0 !important;
 }
 
 .dsc-md ul,
 .dsc-md ol {
-  margin: 12px 0;
-  padding-left: 28px;
+  margin: 16px 0;
+  padding-left: 18px;
 }
 
-.dsc-md li {
-  margin: 6px 0;
+.dsc-md li:not(:first-child) {
+  margin-top: 6px;
+}
+
+.dsc-md li > ul,
+.dsc-md li > ol {
+  margin-top: 4px;
+}
+
+.dsc-md li::marker {
+  line-height: 24px;
+  color: var(--dsw-alias-label-secondary, var(--dsc-text-2));
+}
+
+.dsc-md :where(ul, ol) ol {
+  list-style-position: inside;
+  padding-left: 0;
+}
+
+.dsc-md :where(ul, ol) ol li p {
+  display: inline;
 }
 
 .dsc-md li > p {
-  margin: 4px 0;
+  margin: 8px 0;
 }
 
-.dsc-md strong {
-  font-weight: 600;
+.dsc-md li > :first-child {
+  margin-top: 0;
 }
 
-.dsc-md code {
-  padding: 2px 5px;
-  border-radius: 5px;
-  background: var(--dsc-inline-code);
+.dsc-md li > :last-child:not(.dsc-code-block, .dsc-table-scroll) {
+  margin-bottom: 0;
+}
+
+.dsc-md :where(h4, h5, h6) + :where(ul, ol) {
+  margin-top: 8px;
+}
+
+.dsc-md :where(h4, h5, h6):has(+ :where(ul, ol)) {
+  margin-bottom: 8px;
+}
+
+.dsc-md :not(pre) > code {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  padding: 0 5px;
+  border: 0.5px solid var(--dsw-alias-border-l1, var(--dsc-border));
+  border-radius: var(--dsw-radius-sm, 8px);
+  background-color: var(--dsw-alias-markdown-inline-code, var(--dsc-md-inline-code));
+  font: var(--dsw-font-markdown-code, 12px/19px var(--dsc-mono));
   font-family: var(--dsc-mono);
-  font-size: var(--dsw-font-markdown-code-font-size, calc(var(--dsh-code-font-size, 13px) + 1px));
+  font-size: 0.875em !important;
+}
+
+.dsc-md :where(h1, h2, h3, h4, h5, h6) code {
+  font: inherit;
+  font-family: var(--dsc-mono);
 }
 
 .dsc-md pre {
-  margin: 14px 0;
-  padding: 14px 16px;
-  border-radius: 12px;
-  background: var(--dsc-code);
-  overflow-x: auto;
+  margin: 16px 0;
+  font-family: var(--dsc-mono);
+  overflow: auto;
 }
 
-.dsc-md pre code {
-  padding: 0;
-  background: transparent;
+/* Code fence: DSH's card — a banner (language + copy label) over the body.
+   The banner sticks while a long block scrolls past. */
+.dsc-code-block {
+  position: relative;
+  margin: 16px 0;
+  border: 0;
+  border-radius: var(--dsw-radius-lg, 16px);
+  background: var(--dsw-alias-markdown-code-block, var(--dsc-md-code-block));
+  color: var(--dsw-alias-label-primary, var(--dsc-text));
   font-size: var(--dsw-font-markdown-code-block-font-size, var(--dsh-code-font-size, 13px));
   line-height: var(--dsw-font-markdown-code-block-line-height, calc(22px + var(--dsh-code-font-delta, 0px)));
 }
 
-.dsc-code-block {
-  margin: 14px 0;
-  border: 1px solid var(--dsc-border-2);
-  border-radius: 12px;
-  background: var(--dsc-code);
-  overflow: hidden;
-}
-
 .dsc-code-head {
+  position: sticky;
+  top: 0;
+  z-index: 6;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 34px;
-  padding: 0 12px;
-  background: var(--dsc-code-banner);
-  border-bottom: 1px solid var(--dsc-border);
+  gap: 12px;
+  padding: 9px 14px;
+  border-radius: var(--dsw-radius-lg, 16px) var(--dsw-radius-lg, 16px) 0 0;
+  background: var(--dsw-alias-markdown-code-block-banner, var(--dsc-md-code-banner));
+  color: var(--dsw-alias-label-secondary, var(--dsc-text-2));
+  font: 11px/18px var(--dsc-font);
 }
 
 .dsc-code-lang {
-  font: 500 12px/18px var(--dsc-mono);
-  color: var(--dsc-text-3);
+  min-width: 0;
+  overflow: hidden;
+  color: var(--dsw-alias-label-primary, var(--dsc-text));
+  font-family: var(--dsc-mono);
+  font-size: 11px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dsc-code-copy {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 6px;
+  flex: none;
+  padding: 0;
   border: 0;
-  border-radius: 6px;
   background: transparent;
-  color: var(--dsc-text-3);
-  font: 400 12px/18px var(--dsc-font);
+  color: inherit;
+  font: inherit;
   cursor: pointer;
-}
-
-.dsc-code-copy:hover {
-  background: var(--dsc-sidebar-hover);
-  color: var(--dsc-text);
 }
 
 .dsc-code-block pre {
   margin: 0;
-  padding: 12px 16px;
+  padding: 16px;
+  border-radius: 0 0 var(--dsw-radius-lg, 16px) var(--dsw-radius-lg, 16px);
+  background: var(--dsw-alias-markdown-code-block, var(--dsc-md-code-block));
+  font-family: var(--dsc-mono);
+  font-size: var(--dsw-font-markdown-code-block-font-size, var(--dsh-code-font-size, 13px));
+  line-height: var(--dsw-font-markdown-code-block-line-height, calc(22px + var(--dsh-code-font-delta, 0px)));
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.dsc-code-block pre code {
+  padding: 0;
+  border: 0;
   border-radius: 0;
-  background: transparent;
+  background: none;
+  font: inherit;
 }
 
-/* DSH Shiki token palette (light); dark overrides below. */
-.dsc-code-block .hljs-comment,
-.dsc-code-block .hljs-quote {
-  color: #868e96;
-}
-.dsc-code-block .hljs-keyword,
-.dsc-code-block .hljs-selector-tag,
-.dsc-code-block .hljs-literal,
-.dsc-code-block .hljs-section,
-.dsc-code-block .hljs-name,
-.dsc-code-block .hljs-tag {
-  color: #d6336c;
-}
-.dsc-code-block .hljs-string,
-.dsc-code-block .hljs-regexp,
-.dsc-code-block .hljs-addition,
-.dsc-code-block .hljs-attribute,
-.dsc-code-block .hljs-template-tag {
-  color: #2f9e44;
-}
-.dsc-code-block .hljs-number,
-.dsc-code-block .hljs-symbol,
-.dsc-code-block .hljs-bullet,
-.dsc-code-block .hljs-variable,
-.dsc-code-block .hljs-template-variable,
-.dsc-code-block .hljs-attr,
-.dsc-code-block .hljs-built_in,
-.dsc-code-block .hljs-type,
-.dsc-code-block .hljs-property {
-  color: #1c7ed6;
-}
-.dsc-code-block .hljs-title,
-.dsc-code-block .hljs-function .hljs-title,
-.dsc-code-block .hljs-title.function_ {
-  color: #6741d9;
-}
-.dsc-code-block .hljs-params {
-  color: #e8590c;
-}
-.dsc-code-block .hljs-punctuation,
-.dsc-code-block .hljs-operator {
-  color: #495057;
-}
-.dsc-code-block .hljs-meta {
-  color: #868e96;
+.dsc-code-block pre.shiki {
+  background: var(--dsw-alias-markdown-code-block, var(--dsc-md-code-block)) !important;
 }
 
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-comment,
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-quote {
-  color: #adb5bd;
+.dsc-code-block pre.shiki code {
+  white-space: inherit;
 }
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-keyword,
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-selector-tag,
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-literal,
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-section,
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-name,
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-tag {
-  color: #faa2c1;
+
+/* Second-argument fallbacks for Shiki's token variables. Inside DSH the
+   host's shiki.css owns --shiki-* and wins; these keep the same palette
+   when the surface runs standalone or on a host that publishes no palette. */
+.dsc-root {
+  --dsc-shiki-foreground: var(--dsc-text);
+  --dsc-shiki-background: var(--dsc-md-code-block);
+  --dsc-shiki-token-constant: #1c7ed6;
+  --dsc-shiki-token-string: #2f9e44;
+  --dsc-shiki-token-comment: #868e96;
+  --dsc-shiki-token-keyword: #d6336c;
+  --dsc-shiki-token-parameter: #e8590c;
+  --dsc-shiki-token-function: #6741d9;
+  --dsc-shiki-token-string-expression: #2b8a3e;
+  --dsc-shiki-token-punctuation: #495057;
+  --dsc-shiki-token-link: #1971c2;
 }
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-string,
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-regexp,
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-addition,
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-attribute,
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-template-tag {
-  color: #69db7c;
-}
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-number,
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-symbol,
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-bullet,
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-variable,
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-template-variable,
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-attr,
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-built_in,
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-type,
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-property {
-  color: #4dabf7;
-}
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-title,
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-function .hljs-title,
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-title.function_ {
-  color: #b197fc;
-}
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-params {
-  color: #ffa94d;
-}
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-punctuation,
-.dsc-root[data-theme="dark"] .dsc-code-block .hljs-operator {
-  color: #ced4da;
+
+.dsc-root[data-theme="dark"] {
+  --dsc-shiki-token-constant: #4dabf7;
+  --dsc-shiki-token-string: #69db7c;
+  --dsc-shiki-token-comment: #adb5bd;
+  --dsc-shiki-token-keyword: #faa2c1;
+  --dsc-shiki-token-parameter: #ffa94d;
+  --dsc-shiki-token-function: #b197fc;
+  --dsc-shiki-token-string-expression: #8ce99a;
+  --dsc-shiki-token-punctuation: #ced4da;
+  --dsc-shiki-token-link: #74c0fc;
 }
 
 .dsc-md blockquote {
-  margin: 14px 0;
-  padding: 2px 0 2px 14px;
-  border-left: 3px solid var(--dsc-border-3);
-  color: var(--dsc-text-2);
+  margin: 16px 0 0;
+  padding-left: 14px;
+  border-left: 2px solid var(--dsw-alias-label-caption, var(--dsc-text-4));
+  color: inherit;
+}
+
+.dsc-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
 }
 
 .dsc-md table {
-  width: 100%;
-  margin: 14px 0;
+  width: max-content;
+  max-width: max-content;
+  margin: 0;
   border-collapse: collapse;
   font-size: var(--dsw-font-markdown-table-font-size, var(--dsh-content-font-size-secondary, 15px));
   line-height: var(--dsw-font-markdown-table-line-height, calc(25px + var(--dsh-content-font-delta-secondary, 0px)));
 }
 
-.dsc-md th,
-.dsc-md td {
-  padding: 6px 10px;
-  border: 1px solid var(--dsc-border-2);
-  text-align: left;
+.dsc-md th {
+  padding: 10px 16px;
+  border: 0;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3, var(--dsc-border-3));
+  background: transparent;
+  font-weight: 500;
+  text-align: start;
+  max-width: 320px;
+  max-width: min(30vw, 320px);
+  min-width: 100px;
 }
 
-.dsc-md th {
-  background: var(--dsc-code);
-  font-weight: 500;
+.dsc-md td {
+  padding: 10px 16px;
+  border: 0;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2, var(--dsc-border-2));
+  font-weight: 400;
+  text-align: start;
+  max-width: 320px;
+  max-width: min(30vw, 320px);
+  min-width: 100px;
+}
+
+.dsc-md th:first-child,
+.dsc-md td:first-child {
+  padding-left: 0;
+}
+
+.dsc-md td:last-child {
+  padding-right: 0;
+}
+
+.dsc-md table code {
+  font-size: 11px;
 }
 
 .dsc-md a {
-  color: var(--dsc-brand);
+  color: var(--dsw-alias-link, var(--dsc-brand));
+  font-weight: 500;
   text-decoration: none;
 }
 
-.dsc-md a:hover {
-  text-decoration: underline;
+.dsc-md a:hover,
+.dsc-md a:focus {
+  outline: none;
+  text-decoration: underline dotted var(--dsw-alias-link, var(--dsc-brand));
+  text-underline-offset: 3px;
 }
 
 .dsc-md hr {
-  margin: 26px 0;
+  display: block;
+  height: 0.5px;
+  margin: 32px 0;
   border: 0;
-  border-top: 1px solid var(--dsc-border-2);
+  background: var(--dsw-alias-border-l2, var(--dsc-border-2));
+}
+
+.dsc-md img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--dsw-radius-md, 12px);
 }
 
 .dsc-cite {

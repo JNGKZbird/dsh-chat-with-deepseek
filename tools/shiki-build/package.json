@@ -1,0 +1,13 @@
+{
+  "name": "dsh-chat-with-deepseek-shiki-build",
+  "private": true,
+  "type": "module",
+  "description": "Rebuilds app/vendor/shiki from shiki + esbuild (offline bundle, no CDN).",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10",
+    "shiki": "3.23.0"
+  }
+}

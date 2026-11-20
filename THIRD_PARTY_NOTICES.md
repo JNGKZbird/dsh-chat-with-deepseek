@@ -10,11 +10,16 @@ its own license. Links point to the upstream license text.
 | KaTeX | 0.16.11 | MIT | https://github.com/KaTeX/KaTeX/blob/main/LICENSE |
 | JSZip | 3.10.1 | MIT or GPLv3 | https://github.com/Stuk/jszip/blob/main/LICENSE.markdown |
 | pdf.js | 3.11 | Apache-2.0 | https://github.com/mozilla/pdf.js/blob/master/LICENSE |
-| highlight.js | 11.11.1 | BSD-3-Clause | https://github.com/highlightjs/highlight.js/blob/main/LICENSE |
+| Shiki | 3.23.0 | MIT | https://github.com/shikijs/shiki/blob/main/LICENSE |
 | Inter | bundled | SIL Open Font License 1.1 | https://github.com/rsms/inter/blob/master/LICENSE.txt |
 
 `app/vendor/markdown-it.LICENSE` carries the upstream markdown-it notice; other
 minified files retain their upstream headers where applicable.
+
+`app/vendor/shiki/` is a self-built, minified bundle of `shiki@3.23.0`
+(`@shikijs/core`, `@shikijs/engine-javascript`, `@shikijs/langs`) using the
+`css-variables` theme. Sources and the build entry live in `tools/shiki-build/`;
+rebuild with `node build.mjs` after `npm install` (needs esbuild).
 
 DeepSeek and the DeepSeek whale mark are trademarks of their respective owner.
 This project is an unofficial community plugin and is not affiliated with,
