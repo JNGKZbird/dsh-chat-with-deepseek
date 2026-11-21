@@ -705,11 +705,20 @@
       const body = hostSaveBody;
       hostSaveTimer = null;
       hostSaveBody = null;
+      const fail = (status) => window.dispatchEvent(
+        new CustomEvent('dsc:host-save-failed', { detail: { status } }),
+      );
       fetch(new URL('sessions', API_BASE), {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body,
-      }).catch(() => { /* host may be unavailable; localStorage already has it */ });
+      }).then((response) => {
+        if (!response.ok) fail(response.status);
+      }).catch(() => {
+        // Host unavailable mid-session: the mirror may be the only copy, so
+        // surface it instead of failing silently.
+        fail(0);
+      });
     }, 300);
   }
 
@@ -3092,7 +3101,13 @@
         dialogIds = [];
         dialogBatchId = null;
         pendingMessageDelete = null;
-        if (pending) deleteMessageNode(pending.sessionId, pending.nodeId);
+        if (pending) {
+          try {
+            deleteMessageNode(pending.sessionId, pending.nodeId);
+          } catch (error) {
+            showToast(`删除失败：${error && error.message ? error.message : error}`);
+          }
+        }
         return;
       }
       if (mode === 'undo-import') {
@@ -5256,6 +5271,10 @@
       if (session.currentId) session.currentId = preferredLeaf(session, session.currentId);
       if (session.summary) delete session.summary;
       session.updatedAt = Date.now();
+      // An emptied tree must not be rebuilt from the stale branch view:
+      // ensureSessionTree falls back to session.messages, which would
+      // resurrect the node just deleted (and persist it again on save).
+      if (!session.tree.length) session.messages = [];
       ensureSessionTree(session);
       if (state.activeId === session.id) {
         state.messages = session.messages;
@@ -5429,11 +5448,16 @@
       const stageRect = stageEl.getBoundingClientRect();
       const next = new Set();
       for (const item of railItems) {
-        const index = item.userIndex >= 0 ? item.userIndex : item.assistantIndex;
-        const article = messagesEl.querySelector(`[data-message-index="${index}"]`);
-        if (!article) continue;
-        const rect = article.getBoundingClientRect();
-        if (rect.bottom >= stageRect.top && rect.top <= stageRect.bottom) next.add(item.nid);
+        // A round is in view when either half is: a long answer can keep the
+        // round on screen after its question scrolled away (and vice versa).
+        const indexes = [item.userIndex, item.assistantIndex].filter((index) => index >= 0);
+        const inView = indexes.some((index) => {
+          const article = messagesEl.querySelector(`[data-message-index="${index}"]`);
+          if (!article) return false;
+          const rect = article.getBoundingClientRect();
+          return rect.bottom >= stageRect.top && rect.top <= stageRect.bottom;
+        });
+        if (inView) next.add(item.nid);
       }
       railVisible = next;
       paintRail();
@@ -7243,6 +7267,13 @@ ${summaryText}`);
       root.dataset.theme = state.theme;
       renderRail();
     }, { signal });
+    let hostSaveWarnedAt = 0;
+    window.addEventListener('dsc:host-save-failed', () => {
+      const now = Date.now();
+      if (now - hostSaveWarnedAt < 30_000) return;
+      hostSaveWarnedAt = now;
+      showToast('会话保存失败：刷新后改动可能丢失');
+    }, { signal });
     $('[data-act="select-work"]').addEventListener('click', () => opts.onSelectWork?.(), { signal });
 
     renderSessions();
@@ -7276,5 +7307,5 @@ ${summaryText}`);
     };
   }
 
-  window.DSChat = { mount, version: '2.26.0' };
+  window.DSChat = { mount, version: '2.26.1' };
 })();
