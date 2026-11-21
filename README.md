@@ -66,6 +66,7 @@ DSH 默认是给开发者准备的 agent harness：每次对话会带工具、�
 - **操作条**：默认隐藏，悬浮或键盘焦点才淡入；最新回答有复制/重新生成/编辑/删除/朗读/分享，旧回答有复制/重新生成/编辑/删除；分享只提示「单条分享链接需要 DeepSeek 服务端，暂不支持」。
 - **设置**：导入/导出、应用能力、TTS 音色，以及内置 README 阅读器（项目说明、使用文档、截图与 MIT 许可）。
 - **主题/字体**：正文、气泡、输入卡读 `--dsh-content-font-size` / `--dsh-content-font-delta`；标题、表格、代码读 `--dsw-font-markdown-*`；代码另读 `--dsh-code-font-size`；字体族读 `--dsw-font-family` / `--ds-font-family-code`。没有 DSH 变量时回退官网字号（消息 16/28、输入 16/24、代码 14/13）。
+- **排版/代码**：Markdown 排版与代码块按 DSH 聊天面移植——Shiki `css-variables` 主题（token 色随宿主明暗切换）、58 种语言按需加载、长行软换行、语言 banner + 复制按钮；`$…$`、`$$…$$`、`\[…\]`、`\(…\)` 四种公式定界符与 ```math 代码块。
 
 ![插件里的全局搜索遮罩](docs/screenshots/global-search.png)
 
