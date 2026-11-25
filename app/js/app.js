@@ -649,6 +649,41 @@
     return fork;
   }
 
+  // Shared by "regenerate" and "save & resend": a round with an existing
+  // answer (or a reachable continuation) forks a sibling user round; an
+  // unanswered leaf is edited in place and refills its blank answer, so no
+  // phantom node is created for a question that never had an answer.
+  function prepareRoundForGeneration(session, userNode, value) {
+    const answers = (session.tree || []).filter((node) => node
+      && node.role === 'assistant' && node.parentId === userNode.id);
+    const answered = answers.some((node) => messageHasAnswer(node));
+    const hasContinuation = (session.tree || []).some((node) => node
+      && node.role === 'user' && node.parentId === userNode.id)
+      || (!answered && answers.some((node) => session.tree.some((child) => child
+        && child.parentId === node.id)));
+    if (answered || hasContinuation) {
+      const fork = forkUserRound(session, userNode);
+      if (typeof value === 'string') fork.text = value;
+      if (session.summary) delete session.summary;
+      return { existingAssistant: null };
+    }
+    if (typeof value === 'string') {
+      userNode.text = value;
+      userNode.html = undefined;
+      userNode.streaming = false;
+      delete userNode.tts;
+    }
+    const existingAssistant = answers.find((node) => session.messages.includes(node)) || null;
+    session.tree = session.tree.filter((node) => {
+      if (!node || node.role !== 'assistant' || node.parentId !== userNode.id) return true;
+      if (node === existingAssistant) return true;
+      if (messageHasAnswer(node)) return true;
+      return session.tree.some((child) => child && child.parentId === node.id);
+    });
+    session.currentId = existingAssistant ? existingAssistant.id : userNode.id;
+    return { existingAssistant };
+  }
+
   function sessionsForPersistence(sessions) {
     return (sessions || []).map((session) => {
       ensureSessionTree(session);
@@ -1516,7 +1551,7 @@
     const readmeEl = $('[data-role="readme"]');
     const readmeBodyEl = $('[data-role="readme-body"]');
     let readmeMarkdown = '';
-    let readmeVersion = '0.6.5';
+    let readmeVersion = '0.6.6';
     let readmeLoading = null;
     let readmeCloseTimer = null;
     let exportState = null;
@@ -5294,8 +5329,8 @@
       if (state.activeId === session.id) renderMessages();
     }
 
-    // "保存并重发": keep the old round untouched, fork a sibling user round
-    // with the edited text and generate its answer (a real tree branch).
+    // "保存并重发": an answered round keeps its old version and forks a sibling
+    // user round; an unanswered leaf is edited in place and refilled.
     async function resendEditMessage() {
       const editing = editMessageState;
       if (!editing || editing.role !== 'user') return;
@@ -5324,25 +5359,12 @@
         closeEditMessage();
         return;
       }
-      const fork = forkUserRound(session, node);
-      fork.text = value;
-      if (session.summary) delete session.summary;
-      session.updatedAt = Date.now();
-      ensureSessionTree(session);
-      state.activeId = session.id;
-      state.messages = session.messages;
-      storeSessions(state.sessions);
+      // Same rule as regenerate: an unanswered leaf is edited in place and
+      // refilled; only a round with an answer (or a continuation) forks a
+      // sibling user node.
+      const { existingAssistant } = prepareRoundForGeneration(session, node, value);
       closeEditMessage();
-      renderSessions();
-      setView('chat');
-      renderMessages();
-      commitSessionModel(session);
-      await maybeCompressContext();
-      if (state.api.available) {
-        await startReply(apiHistory(), Date.now(), { query: value });
-      } else {
-        startDemoReply(session, null, value);
-      }
+      await beginRoundReply(session, value, existingAssistant);
     }
 
     function requestDeleteMessage(index) {
@@ -5361,7 +5383,9 @@
       dialogIds = [message.id];
       dialogBatchId = null;
       dialogTitle.textContent = message.role === 'user' ? '删除这条提问?' : '删除这条回答?';
-      dialogDesc.textContent = '删除后该消息从上下文中移除；剩余的另一半会作为孤儿轮保留，仍可在导航轨中找到。';
+      dialogDesc.textContent = message.role === 'user'
+        ? '删除后会连同本轮回答一起删除；后续对话会保留，其他分支版本不受影响。'
+        : '删除这条回答后，本轮提问会保留，可以重新生成。';
       dialogDesc.hidden = false;
       dialogConfirm.textContent = '删除';
       dialogConfirm.classList.remove('is-primary');
@@ -5381,15 +5405,34 @@
       if (!session || !Array.isArray(session.tree)) return;
       const node = session.tree.find((entry) => entry.id === nodeId);
       if (!node) return;
-      const children = session.tree.filter((entry) => entry.parentId === nodeId);
-      session.tree = session.tree.filter((entry) => entry.id !== nodeId);
-      for (const child of children) child.parentId = node.parentId ?? null;
+      // A user message is the round anchor: deleting it deletes the whole
+      // round, including every assistant reply hanging off it. The rounds
+      // after those answers are re-attached to the deleted round's parent.
+      // Deleting an answer keeps the question (it can be regenerated).
+      const removeIds = new Set([node.id]);
+      const reattach = new Set();
+      if (node.role === 'user') {
+        const answers = session.tree.filter((entry) => entry
+          && entry.role === 'assistant' && entry.parentId === node.id);
+        for (const answer of answers) {
+          removeIds.add(answer.id);
+          for (const child of session.tree) {
+            if (child && child.parentId === answer.id && !removeIds.has(child.id)) reattach.add(child);
+          }
+        }
+      }
+      for (const child of session.tree) {
+        if (child && child.parentId === node.id && !removeIds.has(child.id)) reattach.add(child);
+      }
+      session.tree = session.tree.filter((entry) => !removeIds.has(entry.id));
+      for (const child of reattach) child.parentId = node.parentId ?? null;
       void pruneTtsCache();
       if (!session.tree.some((entry) => entry.id === session.currentId)) {
         const parent = node.parentId != null
           ? session.tree.find((entry) => entry.id === node.parentId)
           : null;
-        const fallback = parent || children[children.length - 1] || session.tree[session.tree.length - 1];
+        const reattached = [...reattach];
+        const fallback = parent || reattached[reattached.length - 1] || session.tree[session.tree.length - 1];
         session.currentId = fallback?.id || null;
       }
       if (session.currentId) session.currentId = preferredLeaf(session, session.currentId);
@@ -5419,10 +5462,9 @@
     function switchBranch(targetId) {
       const session = sessionById(state.activeId);
       if (!session || !targetId) return;
-      if (streams.has(session.id)) {
-        showToast('正在生成，稍后再切换分支');
-        return;
-      }
+      // Branches can be inspected while a stream runs: the stream owns its own
+      // assistant object and keeps generating in the background, independent
+      // of the branch currently on screen.
       const byId = new Map((session.tree || []).map((node) => [node.id, node]));
       if (!byId.has(targetId)) return;
       stopSpeech();
@@ -6274,7 +6316,7 @@ ${previous.text}`);
         streams.delete(sessionId);
         syncBusy();
         syncSession(sessionId);
-        if (state.activeId === sessionId) renderMessages();
+        if (state.activeId === sessionId && state.messages.includes(assistant)) renderMessages();
         showToast('演示回复：DSH 内会使用真实 DeepSeek API');
       }, 1400);
       stream.demoTimer = timer;
@@ -6361,7 +6403,9 @@ ${previous.text}`);
           stream.frame = 0;
           refreshActivity(assistant);
           if (assistant.text) assistant.html = renderMarkdown(assistant.text, { streaming: true });
-          if (state.activeId === sessionId) updateStreamingMessage(assistant);
+          if (state.activeId === sessionId && state.messages.includes(assistant)) {
+            updateStreamingMessage(assistant);
+          }
         });
       };
 
@@ -6399,11 +6443,11 @@ ${summaryText}`);
             } else if (searchActivity) {
               searchActivity.preview = '无需联网';
             }
-            if (state.activeId === sessionId) renderMessages();
+            if (state.activeId === sessionId && state.messages.includes(assistant)) renderMessages();
           } catch (error) {
             if (controller.signal.aborted) throw error;
             if (searchActivity) searchActivity.preview = '搜索子 Agent 失败，直接回答';
-            if (state.activeId === sessionId) renderMessages();
+            if (state.activeId === sessionId && state.messages.includes(assistant)) renderMessages();
             showToast('联网搜索子 Agent 失败，已直接回答');
           }
         }
@@ -6574,7 +6618,7 @@ ${summaryText}`);
         streams.delete(sessionId);
         syncBusy();
         syncSession(sessionId);
-        if (state.activeId === sessionId) renderMessages();
+        if (state.activeId === sessionId && state.messages.includes(assistant)) renderMessages();
         void maybeGenerateTitle(sessionId);
       } catch (error) {
         const aborted = error instanceof DOMException && error.name === 'AbortError';
@@ -6590,7 +6634,7 @@ ${summaryText}`);
         streams.delete(sessionId);
         syncBusy();
         syncSession(sessionId);
-        if (state.activeId === sessionId) renderMessages();
+        if (state.activeId === sessionId && state.messages.includes(assistant)) renderMessages();
         if (!aborted) showToast('请求失败，请查看消息中的错误');
       } finally {
         clearInterval(tick);
@@ -6706,36 +6750,12 @@ ${summaryText}`);
         showToast('这条提问没有内容可重新生成');
         return;
       }
-      const answers = (session.tree || []).filter((node) => node
-        && node.role === 'assistant' && node.parentId === userNode.id);
-      const answered = answers.some((node) => messageHasAnswer(node));
-      // A later round hanging off this unanswered question means its answer was
-      // deleted (or never finished) mid-conversation. Refilling in place would
-      // detach that continuation, so fork instead and keep the old chain.
-      const hasContinuation = (session.tree || []).some((node) => node
-        && node.role === 'user' && node.parentId === userNode.id)
-        || (!answered && answers.some((node) => session.tree.some((child) => child
-          && child.parentId === node.id)));
-      let existingAssistant = null;
-      if (answered || hasContinuation) {
-        // A reply (or a reachable continuation) already exists: fork a sibling
-        // user round so the old version stays reachable. Only user messages
-        // create tree nodes.
-        forkUserRound(session, userNode);
-        if (session.summary) delete session.summary;
-      } else {
-        // No reply yet and nothing hangs off it (error/stopped/blank leaf or no
-        // node): refill this round in place; never create a branch for an
-        // unanswered question.
-        existingAssistant = answers.find((node) => session.messages.includes(node)) || null;
-        session.tree = session.tree.filter((node) => {
-          if (!node || node.role !== 'assistant' || node.parentId !== userNode.id) return true;
-          if (node === existingAssistant) return true;
-          if (messageHasAnswer(node)) return true;
-          return session.tree.some((child) => child && child.parentId === node.id);
-        });
-        session.currentId = existingAssistant ? existingAssistant.id : userNode.id;
-      }
+      const { existingAssistant } = prepareRoundForGeneration(session, userNode);
+      const query = userNode.text || String(userNode.attachmentText || '').slice(0, 500);
+      await beginRoundReply(session, query, existingAssistant);
+    }
+
+    async function beginRoundReply(session, query, existingAssistant) {
       ensureSessionTree(session);
       state.activeId = session.id;
       state.messages = session.messages;
@@ -6746,7 +6766,6 @@ ${summaryText}`);
       renderSessions();
       renderMessages();
       await maybeCompressContext();
-      const query = userNode.text || String(userNode.attachmentText || '').slice(0, 500);
       if (state.api.available) {
         await startReply(apiHistory(), Date.now(), { query, existingAssistant });
       } else {
@@ -6791,7 +6810,7 @@ ${summaryText}`);
         streams.delete(sessionId);
         syncBusy();
         syncSession(sessionId);
-        if (state.activeId === sessionId) renderMessages();
+        if (state.activeId === sessionId && state.messages.includes(assistant)) renderMessages();
       }, 600);
       stream.demoTimer = timer;
       timers.add(timer);
@@ -7620,5 +7639,5 @@ ${summaryText}`);
     };
   }
 
-  window.DSChat = { mount, version: '2.27.2' };
+  window.DSChat = { mount, version: '2.27.3' };
 })();
