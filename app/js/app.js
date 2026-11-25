@@ -484,6 +484,51 @@
     return chain.length ? chain : tree.slice();
   }
 
+  // Round model: a tree node is a *round* anchored by its user message. The
+  // assistant reply hangs off that user node and is never a branch anchor.
+  // Legacy data (and official DeepSeek exports) can carry several assistant
+  // siblings under one user message; fold each extra answer into a sibling
+  // user round so the branch switcher keeps every version reachable while the
+  // user message stays the only anchor. Deterministic: ids come from the
+  // session's nextMessageId, so a re-import of the same archive migrates to
+  // the same ids.
+  function migrateRoundTree(tree, nextMessageId) {
+    const list = Array.isArray(tree) ? tree : [];
+    const byParent = new Map();
+    for (const node of list) {
+      if (!node || typeof node !== 'object') continue;
+      const key = node.parentId ?? null;
+      if (!byParent.has(key)) byParent.set(key, []);
+      byParent.get(key).push(node);
+    }
+    let next = Math.max(1, Number(nextMessageId) || 1);
+    for (const node of list.slice()) {
+      if (!node || node.role !== 'user') continue;
+      const assistants = (byParent.get(node.id) || []).filter((child) => child && child.role === 'assistant');
+      // Only real answers become sibling rounds; blank/error leftovers stay
+      // hidden under the original round instead of surfacing as empty versions.
+      const answered = assistants.filter((child) => messageHasAnswer(child));
+      if (answered.length < 2) continue;
+      for (let index = 1; index < answered.length; index += 1) {
+        const extra = answered[index];
+        const fork = {
+          id: `m${next++}`,
+          parentId: node.parentId ?? null,
+          role: 'user',
+          text: node.text || '',
+          streaming: false,
+        };
+        if (Array.isArray(node.attachments) && node.attachments.length) fork.attachments = node.attachments;
+        if (Array.isArray(node.images) && node.images.length) fork.images = node.images;
+        if (node.attachmentText) fork.attachmentText = node.attachmentText;
+        if (node.imagesDelegated) fork.imagesDelegated = true;
+        list.push(fork);
+        extra.parentId = fork.id;
+      }
+    }
+    return next;
+  }
+
   function normalizeMessageTree(rawTree, rawMessages, rawCurrentId, rawNextId) {
     const source = Array.isArray(rawTree) && rawTree.length
       ? rawTree
@@ -515,14 +560,16 @@
       const match = /^m(\d+)$/.exec(node.id);
       if (match) nextMessageId = Math.max(nextMessageId, Number(match[1]) + 1);
     }
-    const currentId = typeof rawCurrentId === 'string' && byId.has(rawCurrentId)
+    nextMessageId = migrateRoundTree(tree, nextMessageId);
+    const resolvedById = new Map(tree.map((node) => [node.id, node]));
+    const currentId = typeof rawCurrentId === 'string' && resolvedById.has(rawCurrentId)
       ? rawCurrentId
       : (tree[tree.length - 1]?.id || null);
     return {
       tree,
       currentId,
       nextMessageId,
-      messages: branchFromTree(tree, byId, currentId),
+      messages: branchFromTree(tree, resolvedById, currentId),
     };
   }
 
@@ -572,6 +619,34 @@
     session.currentId = id;
     session.messages.push(message);
     return message;
+  }
+
+  function messageHasAnswer(message) {
+    return Boolean(message && (
+      (typeof message.text === 'string' && message.text.trim())
+      || (typeof message.html === 'string' && message.html.trim())
+    ));
+  }
+
+  // Fork a sibling *user* round under the same parent: the round model's only
+  // way to branch. The new round starts with an empty answer; the caller then
+  // streams a reply (or edits the forked text before replying).
+  function forkUserRound(session, node) {
+    ensureSessionTree(session);
+    const fork = {
+      id: `m${session.nextMessageId++}`,
+      parentId: node.parentId ?? null,
+      role: 'user',
+      text: node.text || '',
+      streaming: false,
+    };
+    if (Array.isArray(node.attachments) && node.attachments.length) fork.attachments = node.attachments;
+    if (Array.isArray(node.images) && node.images.length) fork.images = node.images;
+    if (node.attachmentText) fork.attachmentText = node.attachmentText;
+    if (node.imagesDelegated) fork.imagesDelegated = true;
+    session.tree.push(fork);
+    session.currentId = fork.id;
+    return fork;
   }
 
   function sessionsForPersistence(sessions) {
@@ -937,7 +1012,7 @@
     </div>`;
   }
 
-  function messageHTML(message, messageIndex, lastAssistantIndex, branchInfo, roundLocked) {
+  function messageHTML(message, messageIndex, lastAssistantIndex, branchInfo, roundLocked, canRegenerate = true) {
     if (message.role === 'user') {
       const files = Array.isArray(message.attachments) ? message.attachments : [];
       const images = Array.isArray(message.images)
@@ -965,6 +1040,7 @@
           </div>
           <div class="dsc-actions dsc-user-actions">
             <button class="dsc-action dsc-tip" data-tip="复制" data-tip-side="bottom" data-act="copy" data-message-index="${messageIndex}" aria-label="复制">${icon('copy', 16)}</button>
+            <button class="dsc-action dsc-tip" data-tip="重新生成" data-tip-side="bottom" data-act="regenerate" data-message-index="${messageIndex}" aria-label="重新生成">${icon('refresh', 16)}</button>
             <button class="dsc-action dsc-tip${roundLocked ? ' is-unsupported' : ''}" data-tip="${roundLocked ? '本轮已有 TTS 语音，不能修改' : '编辑'}" data-tip-side="bottom" data-act="edit-message" data-message-index="${messageIndex}" aria-label="${roundLocked ? '本轮已有 TTS 语音，不能修改' : '编辑'}"${roundLocked ? ' disabled aria-disabled="true"' : ''}>${icon('edit', 16)}</button>
             <button class="dsc-action dsc-tip" data-tip="删除" data-tip-side="bottom" data-act="delete-message" data-message-index="${messageIndex}" aria-label="删除">${icon('trash', 16)}</button>
           </div>
@@ -1027,7 +1103,7 @@
     const actions = body && !message.streaming && !message.error
       ? `<div class="dsc-actions">
           <button class="dsc-action dsc-tip" data-tip="复制" data-tip-side="bottom" data-act="copy" data-message-index="${messageIndex}" aria-label="复制">${icon('copy', 16)}</button>
-          <button class="dsc-action dsc-tip" data-tip="重新生成" data-tip-side="bottom" data-act="regenerate" data-message-index="${messageIndex}" aria-label="重新生成">${icon('refresh', 16)}</button>
+          ${canRegenerate ? `<button class="dsc-action dsc-tip" data-tip="重新生成" data-tip-side="bottom" data-act="regenerate" data-message-index="${messageIndex}" aria-label="重新生成">${icon('refresh', 16)}</button>` : ''}
           <button class="dsc-action dsc-tip${roundLocked ? ' is-unsupported' : ''}" data-tip="${roundLocked ? '本轮已有 TTS 语音，不能修改' : '编辑'}" data-tip-side="bottom" data-act="edit-message" data-message-index="${messageIndex}" aria-label="${roundLocked ? '本轮已有 TTS 语音，不能修改' : '编辑'}"${roundLocked ? ' disabled aria-disabled="true"' : ''}>${icon('edit', 16)}</button>
           <button class="dsc-action dsc-tip" data-tip="删除" data-tip-side="bottom" data-act="delete-message" data-message-index="${messageIndex}" aria-label="删除">${icon('trash', 16)}</button>
           ${latest ? `
@@ -1046,7 +1122,6 @@
         ${stopped}
         ${disclaimer}
         ${actions}
-        ${branchSwitcherHTML(branchInfo)}
       </article>`;
   }
 
@@ -1261,6 +1336,7 @@
           <div class="dsc-edit-actions">
             <button class="dsc-import-cancel" type="button" data-act="edit-cancel">取消</button>
             <button class="dsc-import-go" type="button" data-act="edit-save">保存</button>
+            <button class="dsc-import-go" type="button" data-act="edit-resend" hidden>保存并重发</button>
           </div>
         </div>
       </div>
@@ -1422,6 +1498,8 @@
     const editTitle = $('[data-role="edit-title"]');
     const editHint = $('[data-role="edit-hint"]');
     const editText = $('[data-role="edit-text"]');
+    const editSaveBtn = $('[data-act="edit-save"]');
+    const editResendBtn = $('[data-act="edit-resend"]');
     let editMessageState = null;
     let pendingMessageDelete = null;
     const sessionMenuEl = $('[data-role="session-menu"]');
@@ -1438,7 +1516,7 @@
     const readmeEl = $('[data-role="readme"]');
     const readmeBodyEl = $('[data-role="readme-body"]');
     let readmeMarkdown = '';
-    let readmeVersion = '0.6.1';
+    let readmeVersion = '0.6.5';
     let readmeLoading = null;
     let readmeCloseTimer = null;
     let exportState = null;
@@ -3380,6 +3458,8 @@
         entry.node.parentId = parent ? parent.internalId : null;
       }
       const tree = entries.map((entry) => entry.node);
+      let nextMessageId = entries.length + 1;
+      nextMessageId = migrateRoundTree(tree, nextMessageId);
       const byId = new Map(tree.map((node) => [node.id, node]));
       const currentEntry = byRawId.get(raw.current_message_id)
         || entries[entries.length - 1];
@@ -3402,7 +3482,7 @@
         pinned: raw.pinned === true,
         tree,
         currentId,
-        nextMessageId: entries.length + 1,
+        nextMessageId,
         messages,
       };
     }
@@ -5082,10 +5162,12 @@
     function computeBranchInfo(session) {
       const map = new Map();
       if (!session || !Array.isArray(session.tree)) return map;
+      // Round model: only user messages anchor the tree. Assistant replies are
+      // data hanging off their user round and never get a branch switcher.
       const groups = new Map();
       for (const node of session.tree) {
-        if (!node) continue;
-        const key = `${node.parentId ?? 'root'}|${node.role}`;
+        if (!node || node.role !== 'user') continue;
+        const key = node.parentId ?? 'root';
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(node);
       }
@@ -5138,10 +5220,16 @@
         index,
         role: message.role,
       };
-      editTitle.textContent = message.role === 'user' ? '编辑提问' : '编辑回答';
-      editHint.textContent = message.role === 'user'
-        ? '保存后会从这条消息开启新分支，原分支保留，并自动生成新回答。'
+      const isUser = message.role === 'user';
+      editTitle.textContent = isUser ? '编辑提问' : '编辑回答';
+      editHint.textContent = isUser
+        ? '「保存」只改内容，不重新生成；「保存并重发」会保留原分支，并以修改后的内容重新生成。'
         : '保存后直接改写这条回答，后续消息会基于新内容。';
+      if (editResendBtn) editResendBtn.hidden = !isUser;
+      if (editSaveBtn) {
+        editSaveBtn.classList.toggle('dsc-import-go', !isUser);
+        editSaveBtn.classList.toggle('dsc-import-cancel', isUser);
+      }
       editText.value = message.text || '';
       editOverlay.hidden = false;
       editOverlay.classList.remove('show');
@@ -5195,19 +5283,51 @@
         if (state.activeId === session.id) renderMessages();
         return;
       }
-      const newId = `m${session.nextMessageId++}`;
-      const branchNode = {
-        ...node,
-        id: newId,
-        parentId: node.parentId ?? null,
-        text: value,
-        html: undefined,
-        streaming: false,
-      };
-      delete branchNode.tts;
-      session.tree.push(branchNode);
-      session.currentId = newId;
+      // Round model: "保存" edits the question in place and never forks.
+      node.text = value;
+      node.html = undefined;
+      node.streaming = false;
+      delete node.tts;
+      session.updatedAt = Date.now();
+      storeSessions(state.sessions);
+      closeEditMessage();
+      if (state.activeId === session.id) renderMessages();
+    }
+
+    // "保存并重发": keep the old round untouched, fork a sibling user round
+    // with the edited text and generate its answer (a real tree branch).
+    async function resendEditMessage() {
+      const editing = editMessageState;
+      if (!editing || editing.role !== 'user') return;
+      const value = editText.value.trim();
+      if (!value) {
+        showToast('内容不能为空');
+        editText.focus();
+        return;
+      }
+      const session = sessionById(editing.sessionId);
+      if (!session) {
+        closeEditMessage();
+        return;
+      }
+      if (streams.has(session.id)) {
+        showToast('正在生成，稍后再试');
+        return;
+      }
+      if (state.api.available && !state.api.configured) {
+        showToast('请先在 DSH 设置中配置 DeepSeek 凭据');
+        return;
+      }
+      ensureSessionTree(session);
+      const node = (session.tree || []).find((entry) => entry.id === editing.nodeId);
+      if (!node || node.role !== 'user') {
+        closeEditMessage();
+        return;
+      }
+      const fork = forkUserRound(session, node);
+      fork.text = value;
       if (session.summary) delete session.summary;
+      session.updatedAt = Date.now();
       ensureSessionTree(session);
       state.activeId = session.id;
       state.messages = session.messages;
@@ -5218,7 +5338,11 @@
       renderMessages();
       commitSessionModel(session);
       await maybeCompressContext();
-      startReply(apiHistory(), Date.now(), { query: value });
+      if (state.api.available) {
+        await startReply(apiHistory(), Date.now(), { query: value });
+      } else {
+        startDemoReply(session, null, value);
+      }
     }
 
     function requestDeleteMessage(index) {
@@ -5318,6 +5442,9 @@
     let railTipTimer = null;
     let railVisible = new Set();
     let railFrame = 0;
+    let railTipItem = null;
+    let railTipIndex = -1;
+    let railPreviewTimer = null;
 
     function railText(value) {
       return String(value || '').replace(/\s+/g, ' ').trim();
@@ -5326,33 +5453,42 @@
     function buildRailItems(session) {
       const items = [];
       const tree = Array.isArray(session?.tree) ? session.tree : [];
+      // Precompute sibling groups + each user round's mapped answer once:
+      // one pass instead of O(n) per round. The rail tooltip previews a sib
+      // branch by looking up its own assistant message, not the active one.
+      const byParent = new Map();
+      const answerByUser = new Map();
+      for (const entry of tree) {
+        if (!entry) continue;
+        if (entry.role === 'user') {
+          const key = entry.parentId ?? 'root';
+          if (!byParent.has(key)) byParent.set(key, []);
+          byParent.get(key).push(entry);
+        } else if (entry.role === 'assistant' && entry.parentId != null) {
+          const current = answerByUser.get(entry.parentId);
+          if (!current || (!messageHasAnswer(current) && messageHasAnswer(entry))) {
+            answerByUser.set(entry.parentId, entry);
+          }
+        }
+      }
       const pushRound = (user, userIndex, assistant, assistantIndex) => {
         const primary = assistant || user;
         if (!primary) return;
-        const assistantSibs = assistant
-          ? tree.filter((entry) => entry && entry.role === 'assistant' && entry.parentId === assistant.parentId)
-          : [];
-        const userSibs = user
-          ? tree.filter((entry) => entry && entry.role === 'user' && entry.parentId === user.parentId)
-          : [];
-        const sibs = [];
-        const seen = new Set();
-        for (const entry of assistantSibs) {
-          if (seen.has(entry.id)) continue;
-          seen.add(entry.id);
-          sibs.push({ nid: entry.id, label: `答 · ${railText(entry.text).slice(0, 46)}` });
-        }
-        const userAlternatives = assistant
-          ? userSibs.filter((entry) => entry.id !== user?.id)
-          : userSibs;
-        for (const entry of userAlternatives) {
-          if (seen.has(entry.id)) continue;
-          seen.add(entry.id);
-          sibs.push({ nid: entry.id, label: `问 · ${railText(entry.text).slice(0, 46)}` });
-        }
+        // Round model: only user messages branch. Assistant replies hang off
+        // their user round; sibs are alternative user rounds under the parent.
+        const userSibs = user ? (byParent.get(user.parentId ?? 'root') || []) : [];
+        const sibs = userSibs.map((entry) => {
+          const answer = answerByUser.get(entry.id);
+          return {
+            nid: entry.id,
+            label: railText(entry.text).slice(0, 46),
+            user: railText(entry.text).slice(0, 80),
+            assistant: railText(answer?.text).slice(0, 80),
+          };
+        });
         items.push({
-          nid: primary.id,
-          activeNid: primary.id,
+          nid: user ? user.id : primary.id,
+          activeNid: user ? user.id : primary.id,
           user: railText(user?.text).slice(0, 80),
           assistant: railText(assistant?.text).slice(0, 80),
           userIndex,
@@ -5471,36 +5607,99 @@
       });
     }
 
+    function positionRailTip() {
+      if (!railTip || railTip.hidden || !railWrap || railTipIndex < 0) return;
+      const row = railList?.querySelector(`[data-rail-index="${railTipIndex}"]`);
+      if (!row) return;
+      const rowRect = row.getBoundingClientRect();
+      const wrapRect = railWrap.getBoundingClientRect();
+      const tipHeight = railTip.offsetHeight;
+      let top = rowRect.top - wrapRect.top - 8;
+      top = Math.max(0, Math.min(top, Math.max(0, railWrap.clientHeight - tipHeight - 4)));
+      railTip.style.top = `${Math.round(top)}px`;
+    }
+
+    function setRailTipPreview(assistant) {
+      const node = railTip?.querySelector('[data-role="rail-tip-assistant"]');
+      if (!node) return;
+      const next = assistant || '（尚未回复）';
+      if (railPreviewTimer) {
+        clearTimeout(railPreviewTimer);
+        railPreviewTimer = null;
+      }
+      if (node.textContent === next) {
+        // A pending fade may have been aimed at another version: snap back.
+        node.classList.remove('is-swapping');
+        return;
+      }
+      // Respect reduced-motion: the CSS kills the transition, so fading would
+      // just blank the preview for 90ms. Swap immediately instead.
+      if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
+        node.textContent = next;
+        requestAnimationFrame(positionRailTip);
+        return;
+      }
+      // HarmonyOS-style soft swap: fade out briefly, swap the text, fade in.
+      node.classList.add('is-swapping');
+      railPreviewTimer = setTimeout(() => {
+        railPreviewTimer = null;
+        node.textContent = next;
+        // Text length changes the card height; re-clamp after layout.
+        requestAnimationFrame(positionRailTip);
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => node.classList.remove('is-swapping'));
+        });
+      }, 90);
+    }
+
+    // Hovering a version row previews that branch's mapped answer (the user
+    // text is the row itself; the card mirrors Kaltsit's RailTipCard layout).
+    function previewRailSib(nid) {
+      const item = railTipItem;
+      if (!item) return;
+      const sib = (item.sibs || []).find((entry) => entry.nid === nid);
+      if (sib) setRailTipPreview(sib.assistant);
+    }
+
+    function restoreRailTipPreview() {
+      if (railTipItem) setRailTipPreview(railTipItem.assistant);
+    }
+
     function hideRailTip() {
       if (!railTip) return;
+      if (railPreviewTimer) {
+        clearTimeout(railPreviewTimer);
+        railPreviewTimer = null;
+      }
       railTip.hidden = true;
       railTip.innerHTML = '';
+      railTipItem = null;
+      railTipIndex = -1;
     }
 
     function showRailTip(index) {
       const item = railItems[index];
       if (!railTip || !item) return;
-      const sibs = item.sibs.length >= 2
+      if (railPreviewTimer) {
+        clearTimeout(railPreviewTimer);
+        railPreviewTimer = null;
+      }
+      railTipItem = item;
+      railTipIndex = index;
+      // Kaltsit RailTipCard structure: with >=2 versions the card leads with
+      // the version list; otherwise with the user text. The answer preview
+      // always sits below it and follows the hovered version.
+      const head = item.sibs.length >= 2
         ? `<div class="dsc-rail-tip-sibs">${item.sibs.map((sib) => `
             <button class="dsc-rail-sib${sib.nid === item.activeNid ? ' active' : ''}" type="button" data-rail-sib="${escapeHtml(sib.nid)}">
-              ${escapeHtml(sib.label || '（空消息）')}
+              ${escapeHtml(sib.label || '（无用户消息）')}
             </button>`).join('')}</div>`
-        : '';
+        : `<div class="dsc-rail-tip-user">${escapeHtml(item.user || '（无用户消息）')}</div>`;
       railTip.innerHTML = `
-        <div class="dsc-rail-tip-user">${escapeHtml(item.user || '（无提问）')}</div>
-        <div class="dsc-rail-tip-assistant">${escapeHtml(item.assistant || '（无回答）')}</div>
-        ${sibs}`;
+        ${head}
+        <div class="dsc-rail-tip-assistant" data-role="rail-tip-assistant">${escapeHtml(item.assistant || '（尚未回复）')}</div>`;
       railTip.hidden = false;
-      requestAnimationFrame(() => {
-        const row = railList.querySelector(`[data-rail-index="${index}"]`);
-        if (!row || !railWrap) return;
-        const rowRect = row.getBoundingClientRect();
-        const wrapRect = railWrap.getBoundingClientRect();
-        const tipHeight = railTip.offsetHeight;
-        let top = rowRect.top - wrapRect.top - 8;
-        top = Math.max(0, Math.min(top, Math.max(0, railWrap.clientHeight - tipHeight - 4)));
-        railTip.style.top = `${Math.round(top)}px`;
-      });
+      requestAnimationFrame(positionRailTip);
     }
 
     function syncRailTip() {
@@ -5542,14 +5741,24 @@
       const activeSession = sessionById(state.activeId);
       const branchMap = computeBranchInfo(activeSession);
       const roundLocks = computeRoundLocks(activeSession);
+      const nodeById = new Map((activeSession?.tree || []).map((node) => [node.id, node]));
       messagesEl.innerHTML = state.messages
-        .map((message, index) => messageHTML(
-          message,
-          index,
-          lastAssistantIndex,
-          branchMap.get(message.id),
-          roundLocks.has(message.id),
-        ))
+        .map((message, index) => {
+          // Assistant-only orphans (their user message was deleted) have no
+          // round anchor, so "regenerate" is meaningless for them.
+          const parent = message.role === 'assistant' && message.parentId != null
+            ? nodeById.get(message.parentId)
+            : null;
+          const canRegenerate = message.role !== 'assistant' || parent?.role === 'user';
+          return messageHTML(
+            message,
+            index,
+            lastAssistantIndex,
+            branchMap.get(message.id),
+            roundLocks.has(message.id),
+            canRegenerate,
+          );
+        })
         .join('');
       scheduleCodeUpgrade();
       if (state.findOn) refreshFindMatches();
@@ -6094,7 +6303,7 @@ ${previous.text}`);
       const officialSearch = searchReady && searchConfig.kind === 'official';
       const agentSearch = searchReady && searchConfig.kind === 'agent';
       const wantsThinking = !isOfficialDeepSeekProvider(state.api.provider) || state.thinking !== 'off';
-      const assistant = {
+      let assistant = {
         role: 'assistant',
         text: '',
         html: '',
@@ -6112,8 +6321,25 @@ ${previous.text}`);
         streaming: true,
       };
       const session = sessionById(sessionId);
-      if (session) appendMessageNode(session, assistant);
-      else state.messages.push(assistant);
+      if (session) {
+        // Unanswered round: refill its existing blank answer node instead of
+        // appending a second assistant sibling (no new branch).
+        const reused = options.existingAssistant;
+        if (reused && Array.isArray(session.tree) && session.tree.includes(reused)) {
+          delete reused.tts;
+          delete reused.stopped;
+          delete reused.error;
+          Object.assign(reused, assistant, { id: reused.id, parentId: reused.parentId });
+          assistant = reused;
+          session.currentId = reused.id;
+          ensureSessionTree(session);
+          if (state.activeId === sessionId) state.messages = session.messages;
+        } else {
+          appendMessageNode(session, assistant);
+        }
+      } else {
+        state.messages.push(assistant);
+      }
       const stream = { controller: null, assistant, frame: 0, tick: null };
       streams.set(sessionId, stream);
       syncBusy();
@@ -6433,70 +6659,135 @@ ${summaryText}`);
       sendDemoMessage(text);
     }
 
-    async function regenerateMessage(index) {
-      if (activeStream()) return;
-      const session = sessionById(state.activeId);
-      const node = state.messages[index];
-      if (!session || !node || node.role !== 'assistant') return;
-      ensureSessionTree(session);
-      const parent = (session.tree || []).find((entry) => entry.id === node.parentId);
-      if (!parent || parent.role !== 'user') {
-        showToast('找不到对应的提问，无法重新生成');
+    // One entry point for both action bars. The user message is the only
+    // round anchor; an assistant-only orphan cannot be regenerated at all.
+    async function regenerateFromIndex(index) {
+      if (activeStream()) {
+        showToast('正在生成，稍后再试');
         return;
       }
-      session.currentId = parent.id;
-      if (session.summary) delete session.summary;
-      ensureSessionTree(session);
-      state.messages = session.messages;
-      storeSessions(state.sessions);
-      renderMessages();
-      commitSessionModel(session);
-      await maybeCompressContext();
-      startReply(apiHistory(), Date.now(), { query: parent.text || '' });
+      const session = sessionById(state.activeId);
+      const message = state.messages[index];
+      if (!session || !message) return;
+      if (message.role === 'user') {
+        await regenerateRound(message.id);
+        return;
+      }
+      if (message.role !== 'assistant') return;
+      const parent = (session.tree || []).find((node) => node && node.id === message.parentId);
+      if (!parent || parent.role !== 'user') {
+        showToast('这条回答没有对应的提问，无法重新生成');
+        return;
+      }
+      await regenerateRound(parent.id);
     }
 
-    async function regenerateReply() {
-      if (activeStream()) return;
-      let lastUserIndex = -1;
-      for (let index = state.messages.length - 1; index >= 0; index -= 1) {
-        if (state.messages[index].role === 'user') {
-          lastUserIndex = index;
-          break;
-        }
+    async function regenerateRound(userId) {
+      const session = sessionById(state.activeId);
+      if (!session || !userId) return;
+      if (streams.has(session.id)) {
+        showToast('正在生成，稍后再试');
+        return;
       }
-      if (lastUserIndex < 0) return;
       if (state.api.available && !state.api.configured) {
         showToast('请先在 DSH 设置中配置 DeepSeek 凭据');
         return;
       }
-      const query = state.messages[lastUserIndex].text || '';
-      // Truncate in place so the active session keeps the same array identity.
-      state.messages.length = lastUserIndex + 1;
-      const session = sessionById(state.activeId);
-      if (session) {
-        const userNode = state.messages[lastUserIndex];
-        if (userNode?.id) session.currentId = userNode.id;
-        ensureSessionTree(session);
-        commitSessionModel(session);
-      }
-      if (session?.summary && Number(session.summary.throughIndex) > lastUserIndex) {
-        delete session.summary;
-        storeSessions(state.sessions);
-      }
-      if (state.api.available) {
-        await maybeCompressContext();
-        startReply(apiHistory(), Date.now(), { query });
+      ensureSessionTree(session);
+      const userNode = (session.tree || []).find((node) => node && node.id === userId && node.role === 'user');
+      if (!userNode) {
+        showToast('找不到对应的提问，无法重新生成');
         return;
       }
-      const sessionId = state.activeId;
-      const messages = state.messages;
-      const stream = { controller: null, assistant: null, demoTimer: null };
+      const hasPayload = Boolean(userNode.text || userNode.attachmentText
+        || (Array.isArray(userNode.attachments) && userNode.attachments.length)
+        || (Array.isArray(userNode.images) && userNode.images.length));
+      if (!hasPayload) {
+        showToast('这条提问没有内容可重新生成');
+        return;
+      }
+      const answers = (session.tree || []).filter((node) => node
+        && node.role === 'assistant' && node.parentId === userNode.id);
+      const answered = answers.some((node) => messageHasAnswer(node));
+      // A later round hanging off this unanswered question means its answer was
+      // deleted (or never finished) mid-conversation. Refilling in place would
+      // detach that continuation, so fork instead and keep the old chain.
+      const hasContinuation = (session.tree || []).some((node) => node
+        && node.role === 'user' && node.parentId === userNode.id)
+        || (!answered && answers.some((node) => session.tree.some((child) => child
+          && child.parentId === node.id)));
+      let existingAssistant = null;
+      if (answered || hasContinuation) {
+        // A reply (or a reachable continuation) already exists: fork a sibling
+        // user round so the old version stays reachable. Only user messages
+        // create tree nodes.
+        forkUserRound(session, userNode);
+        if (session.summary) delete session.summary;
+      } else {
+        // No reply yet and nothing hangs off it (error/stopped/blank leaf or no
+        // node): refill this round in place; never create a branch for an
+        // unanswered question.
+        existingAssistant = answers.find((node) => session.messages.includes(node)) || null;
+        session.tree = session.tree.filter((node) => {
+          if (!node || node.role !== 'assistant' || node.parentId !== userNode.id) return true;
+          if (node === existingAssistant) return true;
+          if (messageHasAnswer(node)) return true;
+          return session.tree.some((child) => child && child.parentId === node.id);
+        });
+        session.currentId = existingAssistant ? existingAssistant.id : userNode.id;
+      }
+      ensureSessionTree(session);
+      state.activeId = session.id;
+      state.messages = session.messages;
+      session.updatedAt = Date.now();
+      storeSessions(state.sessions);
+      commitSessionModel(session);
+      setView('chat');
+      renderSessions();
+      renderMessages();
+      await maybeCompressContext();
+      const query = userNode.text || String(userNode.attachmentText || '').slice(0, 500);
+      if (state.api.available) {
+        await startReply(apiHistory(), Date.now(), { query, existingAssistant });
+      } else {
+        startDemoReply(session, existingAssistant, query);
+      }
+    }
+
+    function startDemoReply(session, existingAssistant, query) {
+      const sessionId = session.id;
+      const fresh = {
+        role: 'assistant',
+        html: '',
+        activity: [],
+        startedAt: Date.now(),
+        streaming: true,
+      };
+      let assistant = fresh;
+      if (existingAssistant) {
+        delete existingAssistant.tts;
+        delete existingAssistant.stopped;
+        delete existingAssistant.error;
+        Object.assign(existingAssistant, fresh, {
+          id: existingAssistant.id,
+          parentId: existingAssistant.parentId,
+        });
+        assistant = existingAssistant;
+        session.currentId = assistant.id;
+        ensureSessionTree(session);
+        state.messages = session.messages;
+      } else {
+        appendMessageNode(session, assistant);
+      }
+      const stream = { controller: null, assistant, frame: 0, tick: null, demoTimer: null };
       streams.set(sessionId, stream);
       syncBusy();
       renderMessages();
+      const html = /公式|成本|价格|latex|数学/i.test(query || '') ? REPLY_LATEX : GENERIC_HTML;
       const timer = setTimeout(() => {
         timers.delete(timer);
-        appendMessageNode(session, { role: 'assistant', html: GENERIC_HTML });
+        assistant.html = html;
+        assistant.streaming = false;
         streams.delete(sessionId);
         syncBusy();
         syncSession(sessionId);
@@ -6842,12 +7133,7 @@ ${summaryText}`);
           return;
         }
         if (act === 'regenerate') {
-          const index = Number(actionEl.dataset.messageIndex);
-          if (Number.isInteger(index) && state.messages[index]?.role === 'assistant') {
-            void regenerateMessage(index);
-          } else {
-            regenerateReply();
-          }
+          void regenerateFromIndex(Number(actionEl.dataset.messageIndex));
           return;
         }
         if (act === 'edit-message') {
@@ -6864,6 +7150,10 @@ ${summaryText}`);
         }
         if (act === 'edit-save') {
           void saveEditMessage();
+          return;
+        }
+        if (act === 'edit-resend') {
+          void resendEditMessage();
           return;
         }
         if (act === 'branch-switch') {
@@ -7162,6 +7452,29 @@ ${summaryText}`);
       }
     }, { signal });
     railTip?.addEventListener('mouseleave', scheduleRailTipHide, { signal });
+    railTip?.addEventListener('mouseover', (event) => {
+      const row = event.target.closest('[data-rail-sib]');
+      if (row) previewRailSib(row.dataset.railSib);
+    }, { signal });
+    railTip?.addEventListener('mouseout', (event) => {
+      const row = event.target.closest('[data-rail-sib]');
+      if (!row) return;
+      const next = event.relatedTarget;
+      // Moving between version rows: the next row's mouseover updates it.
+      if (next instanceof Element && next.closest('[data-rail-sib]')) return;
+      restoreRailTipPreview();
+    }, { signal });
+    railTip?.addEventListener('focusin', (event) => {
+      const row = event.target.closest('[data-rail-sib]');
+      if (row) previewRailSib(row.dataset.railSib);
+    }, { signal });
+    railTip?.addEventListener('focusout', (event) => {
+      const row = event.target.closest('[data-rail-sib]');
+      if (!row) return;
+      const next = event.relatedTarget;
+      if (next instanceof Element && next.closest('[data-rail-sib]')) return;
+      restoreRailTipPreview();
+    }, { signal });
     railTip?.addEventListener('click', (event) => {
       const sib = event.target.closest('[data-rail-sib]');
       if (!sib) return;
@@ -7307,5 +7620,5 @@ ${summaryText}`);
     };
   }
 
-  window.DSChat = { mount, version: '2.26.1' };
+  window.DSChat = { mount, version: '2.27.2' };
 })();
