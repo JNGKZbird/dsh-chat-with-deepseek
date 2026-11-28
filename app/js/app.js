@@ -6478,6 +6478,7 @@ ${summaryText}`);
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
+        let stopReason = '';
         const toolActivities = new Map();
         const handleEvent = (block) => {
           const data = block
@@ -6495,6 +6496,11 @@ ${summaryText}`);
           }
           if (event.type === 'error') {
             throw new Error(apiErrorMessage(event));
+          }
+          if (event.type === 'message_delta') {
+            const reason = event.delta && event.delta.stop_reason;
+            if (typeof reason === 'string' && reason) stopReason = reason;
+            return;
           }
           if (event.type === 'content_block_start') {
             const blockValue = event.content_block || {};
@@ -6607,7 +6613,16 @@ ${summaryText}`);
           }
         }
         if (buffer.trim()) handleEvent(buffer);
-        if (!assistant.text.trim()) throw new Error('模型没有返回文本内容');
+        if (!assistant.text.trim()) {
+          if (stopReason === 'max_tokens') {
+            throw new Error(assistant.reasoning.trim()
+              ? '模型在思考阶段用尽了本次输出额度，未产出正文。可降低思考强度后重试。'
+              : '本次输出额度用尽，模型未产出正文。');
+          }
+          throw new Error(stopReason
+            ? `模型没有返回文本内容（stop_reason: ${stopReason}）`
+            : '模型没有返回文本内容（上游流已结束，未收到结束原因）');
+        }
         assistant.html = renderMarkdown(assistant.text);
         assistant.streaming = false;
         const searchActivities = (assistant.activity || []).filter((item) => item.type === 'search');
@@ -7639,5 +7654,5 @@ ${summaryText}`);
     };
   }
 
-  window.DSChat = { mount, version: '2.27.3' };
+  window.DSChat = { mount, version: '2.27.4' };
 })();
